@@ -2,6 +2,7 @@
 /.vs/
 /out/
 /local-test/
+/.research/
 
 *.user
 *.suo
