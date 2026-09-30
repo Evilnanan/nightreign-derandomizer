@@ -90,8 +90,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item (Join-Path $env:DIST 'Release/derandomizer.dll') $stage
           Copy-Item (Join-Path $env:DIST 'Release/Seed Reroller.exe') $stage
-          Copy-Item 'README.md' $stage
-          Copy-Item 'README.zh-CN.md' $stage
           $zip = "nightreign-derandomizer-$env:VERSION-win64.zip"
           Compress-Archive -Path "$stage/*" -DestinationPath $zip -CompressionLevel Optimal
           "zip=$zip" >> $env:GITHUB_OUTPUT
