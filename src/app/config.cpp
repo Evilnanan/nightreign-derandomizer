@@ -18,10 +18,13 @@ std::string makeModConfig(std::uint32_t seed, int nightlord, int everdark) {
             << "; Nightlord IDs:\r\n"
             << "; 0=Gladius, 1=Adel, 2=Gnoster, 3=Maris, 4=Libra\r\n"
             << "; 5=Fulghor, 6=Caligo, 7=Heolstor, 8=Harmonia, 9=Straghess\r\n"
-            << "nightlord = " << nightlord << "\r\n"
-            << "everdark = " << everdark << "\r\n"
+            << "; -1=Random\r\n"
+            << "nightlord = " << nightlord << "\r\n\r\n"
+            << "; 0=Normal, 1=Everdark, -1=Random\r\n"
+            << "everdark = " << everdark << "\r\n\r\n"
+            << "; 32-bit integer (decimal or hexadecimal); -1 disables seed locking\r\n"
             << "seed = 0x" << std::uppercase << std::hex << std::setw(8)
-            << std::setfill('0') << seed << std::dec << "\r\n"
+            << std::setfill('0') << seed << std::dec << "\r\n\r\n"
             << "log = 0\r\n";
     return content.str();
 }

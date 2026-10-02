@@ -2,13 +2,15 @@ name: Release
 
 on:
   push:
+    branches:
+      - main
     tags:
       - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to (re)release, e.g. v1.0.0'
-        required: true
+        description: 'Existing tag to (re)release; leave empty to use VERSION on the selected ref'
+        required: false
         type: string
 
 permissions:
@@ -19,38 +21,103 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Build and publish
+  prepare:
+    name: Resolve version and tag
     runs-on: windows-latest
-    env:
-      DIST: build/dist
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      sha: ${{ steps.meta.outputs.sha }}
+      create_tag: ${{ steps.meta.outputs.create_tag }}
+      should_release: ${{ steps.meta.outputs.should_release }}
     steps:
+      - name: Checkout release source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.sha }}
+          fetch-depth: 0
+
       - name: Resolve release tag
         id: meta
         shell: pwsh
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
           INPUT_TAG: ${{ inputs.tag }}
         run: |
-          $tag = if ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:INPUT_TAG } else { $env:REF_NAME }
-          if ([string]::IsNullOrWhiteSpace($tag)) {
-            throw 'Could not determine the release tag.'
+          $explicitTag = ($env:EVENT_NAME -eq 'push' -and $env:REF_TYPE -eq 'tag') -or
+            ($env:EVENT_NAME -eq 'workflow_dispatch' -and -not [string]::IsNullOrEmpty($env:INPUT_TAG))
+          if ($explicitTag) {
+            $tag = if ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:INPUT_TAG } else { $env:REF_NAME }
+            $version = $tag -creplace '^v', ''
           }
-          if ($tag -notmatch '^v\d+\.\d+\.\d+([-+].*)?$') {
-            throw "Tag '$tag' is not a semantic version tag (expected vX.Y.Z or vX.Y.Z-suffix)."
+          else {
+            if (-not (Test-Path -LiteralPath 'VERSION' -PathType Leaf)) {
+              throw 'VERSION is missing. Add a semantic version such as 1.0.1 to the repository root.'
+            }
+            $version = Get-Content -LiteralPath 'VERSION' -Raw
+            if ([string]::IsNullOrWhiteSpace($version)) {
+              throw 'Invalid version: VERSION must contain a semantic version such as 1.0.1.'
+            }
+            $version = $version.Trim()
+            $tag = "v$version"
           }
-          $version = $tag -replace '^v', ''
-          $isPrerelease = if ($version.Contains('-')) { 'true' } else { 'false' }
+
+          $semver = '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$'
+          if (-not $tag.StartsWith('v') -or $version -cnotmatch $semver) {
+            throw "Invalid version '$version'. Use X.Y.Z, optionally with a prerelease or build suffix; VERSION must not include the v prefix."
+          }
+          $isPrerelease = if ($Matches[4]) { 'true' } else { 'false' }
+          $sha = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to resolve the checked-out commit.' }
+          $existingTag = git tag --list -- $tag
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to list local tags.' }
+          $createTag = 'false'
+          $shouldRelease = 'true'
+          if ($existingTag) {
+            if (-not $explicitTag -and $env:EVENT_NAME -eq 'push') {
+              $shouldRelease = 'false'
+              Write-Host "Tag $tag already exists; bump VERSION to publish a new release."
+            }
+            else {
+              $tagSha = git rev-parse --verify "refs/tags/${tag}^{commit}"
+              if ($LASTEXITCODE -ne 0) { throw "Failed to resolve tag $tag." }
+              if ($tagSha -ne $sha) {
+                throw "Tag $tag points to another commit. Bump VERSION, or enter $tag explicitly to rebuild that tagged revision."
+              }
+            }
+          }
+          elseif ($explicitTag) {
+            throw "Tag $tag does not exist. Leave the tag input empty to create a tag from VERSION."
+          }
+          else {
+            $createTag = 'true'
+          }
           "tag=$tag" >> $env:GITHUB_OUTPUT
           "version=$version" >> $env:GITHUB_OUTPUT
           "prerelease=$isPrerelease" >> $env:GITHUB_OUTPUT
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "create_tag=$createTag" >> $env:GITHUB_OUTPUT
+          "should_release=$shouldRelease" >> $env:GITHUB_OUTPUT
           Write-Host "Resolved tag=$tag version=$version prerelease=$isPrerelease"
+          if ($shouldRelease -eq 'false') {
+            "Release skipped: tag $tag already exists. Bump VERSION to publish a new release." >> $env:GITHUB_STEP_SUMMARY
+          }
 
-      - name: Checkout the tagged revision
+  release:
+    name: Build and publish
+    needs: prepare
+    if: needs.prepare.outputs.should_release == 'true'
+    runs-on: windows-latest
+    env:
+      DIST: build/dist
+    steps:
+      - name: Checkout the resolved commit
         uses: actions/checkout@v7
         with:
-          ref: ${{ steps.meta.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.sha }}
           fetch-depth: 0
 
       - name: Show toolchain
@@ -74,7 +141,7 @@ jobs:
         run: |
           $dist = Join-Path $env:DIST 'Release'
           if (-not (Test-Path $dist)) { throw "Build output directory not found: $dist" }
-          foreach ($name in @('derandomizer.dll', 'Seed Reroller.exe')) {
+          foreach ($name in @('derandomizer.dll', 'Seed Reroller.exe', 'derandomizer.ini')) {
             $path = Join-Path $dist $name
             if (-not (Test-Path $path)) { throw "Missing expected artifact: $path" }
             Write-Host ("{0}  {1:N0} bytes" -f $name, (Get-Item $path).Length)
@@ -84,24 +151,38 @@ jobs:
         id: package
         shell: pwsh
         env:
-          VERSION: ${{ steps.meta.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           $stage = 'stage/nightreign-derandomizer'
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item (Join-Path $env:DIST 'Release/derandomizer.dll') $stage
           Copy-Item (Join-Path $env:DIST 'Release/Seed Reroller.exe') $stage
+          Copy-Item (Join-Path $env:DIST 'Release/derandomizer.ini') $stage
           $zip = "nightreign-derandomizer-$env:VERSION-win64.zip"
           Compress-Archive -Path "$stage/*" -DestinationPath $zip -CompressionLevel Optimal
           "zip=$zip" >> $env:GITHUB_OUTPUT
           Write-Host ("Packaged {0}  {1:N0} bytes" -f $zip, (Get-Item $zip).Length)
 
+      - name: Create release tag after a successful build
+        if: needs.prepare.outputs.create_tag == 'true'
+        shell: pwsh
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          git tag -- $env:TAG $env:SHA
+          if ($LASTEXITCODE -ne 0) { throw "Failed to create tag $env:TAG." }
+          git push origin "refs/tags/$env:TAG"
+          if ($LASTEXITCODE -ne 0) { throw "Failed to push tag $env:TAG. Existing tags are never overwritten." }
+
+      # GITHUB_TOKEN tag pushes do not trigger another workflow run, so publish here.
       - name: Publish GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.meta.outputs.tag }}
-          VERSION: ${{ steps.meta.outputs.version }}
-          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
           ZIP: ${{ steps.package.outputs.zip }}
         run: |
           $ErrorActionPreference = 'Continue'
@@ -132,7 +213,7 @@ jobs:
         if: always()
         shell: pwsh
         env:
-          TAG: ${{ steps.meta.outputs.tag }}
+          TAG: ${{ needs.prepare.outputs.tag }}
           ZIP: ${{ steps.package.outputs.zip }}
           TRIGGER: ${{ github.event_name }}
         run: |

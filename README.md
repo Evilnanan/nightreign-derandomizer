@@ -2,11 +2,22 @@
 
 **English** | [中文](README.zh-CN.md)
 
-This project produces two Windows x64 artifacts:
+This project produces the following Windows x64 artifacts:
 
-- `derandomizer.dll` — the game mod, loaded by a mod loader.
+- `derandomizer.dll` — the mod.
 - `Seed Reroller.exe` — a companion tool that searches for / predicts seeds and
   generates `derandomizer.ini`.
+- `derandomizer.ini` — mod configuration. Settings are in the `[settings]` section:
+
+| Setting | Description |
+| --- | --- |
+| `nightlord` | Nightlord ID (`0`–`9`); `-1` disables Nightlord locking. |
+| `everdark` | `0` forces Normal, `1` forces Everdark; `-1` disables variant locking. |
+| `seed` | Seed to use (32-bit integer, decimal or hexadecimal); `-1` disables seed locking. |
+| `log` | `0` disables logging, `1` enables it. |
+
+Configuration supports hot reload: changes to `derandomizer.ini` take effect
+automatically after saving, without restarting the game.
 
 ## Project layout
 
@@ -43,6 +54,7 @@ Release artifacts land in a single directory:
 ```text
 build/dist/Release/
 ├── derandomizer.dll
+├── derandomizer.ini
 └── Seed Reroller.exe
 ```
 

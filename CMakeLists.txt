@@ -35,6 +35,15 @@ function(configure_project_target target)
     )
 endfunction()
 
+add_custom_target(derandomizer_config ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/dist/$<CONFIG>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/derandomizer.ini"
+        "${CMAKE_BINARY_DIR}/dist/$<CONFIG>/derandomizer.ini"
+    COMMENT "Copying default derandomizer.ini"
+    VERBATIM
+)
+
 add_library(derandomizer SHARED
     src/mod/boss_hooks.cpp
     src/mod/boss_hooks.h
@@ -53,6 +62,7 @@ add_library(derandomizer SHARED
     src/mod/seed_hook.h
 )
 configure_project_target(derandomizer)
+add_dependencies(derandomizer derandomizer_config)
 target_link_libraries(derandomizer PRIVATE version)
 set_target_properties(derandomizer PROPERTIES
     OUTPUT_NAME "derandomizer"
@@ -68,6 +78,7 @@ add_executable(seed_reroller
     src/app/model.h
 )
 configure_project_target(seed_reroller)
+add_dependencies(seed_reroller derandomizer_config)
 target_link_libraries(seed_reroller PRIVATE
     comdlg32
     dwmapi
